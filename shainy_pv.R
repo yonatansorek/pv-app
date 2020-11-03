@@ -1,8 +1,11 @@
 library(shiny)
-#library(shinydashboard)
+library(shinythemes)
+library(shiny)
+library(dplyr)
 library(ggplot2)
 library(ggpubr)
 library(segmented)
+library(data.table)
 
 pv<-read.csv("c:/shiny_pv/data/pv summer 2020.csv")
 
