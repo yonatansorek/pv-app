@@ -254,3 +254,5 @@ server <- function(input, output,session) {
     v$df_sheet()
   })
 }
+
+shinyApp(ui1, server1)
