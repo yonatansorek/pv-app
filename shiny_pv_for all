@@ -1,6 +1,4 @@
 library(shiny)
-#library(shinythemes)
-library(shiny)
 library(dplyr)
 library(ggplot2)
 library(ggpubr)
@@ -8,10 +6,9 @@ library(segmented)
 library(DT)
 
 
-not_sel <- "Not Selected"
-
-shinyUI(
-        fluidPage(
+ui<-
+         fluidPage(#theme = bslib::bs_theme( bg = "#002B36", fg = "#EEE8D5", 
+        #                                            ),
      sidebarLayout(
             sidebarPanel(
               fileInput('file', 'Choose CSV File',
@@ -20,33 +17,31 @@ shinyUI(
               uiOutput('date'),
               uiOutput('sp'),
                uiOutput('rep'),
- 
-              # selectInput(inputId = "rep", label = "Sample n:",NULL ),
-              # 
-              #  selectInput(inputId = "sp", label = "Species:",choices = c(not_sel)),
-              # 
-              #   selectInput(inputId = "date", label = "Date:",choices = c(not_sel)),
 
-              h4("full weter weight"),
+              h4("full water weight"),
               textOutput("ww"),
               h4("Your Current Data"), 
               verbatimTextOutput("brush_info"),
               tableOutput("values"),
-              h4("Laef P-V Parameters"), 
-              tableOutput("final_results")
+              h4("Leaf P-V Parameters"), 
+              tableOutput("final_results"),
+              downloadButton("downloadTable",label = "Download your Results"),
+              h5(),
+              downloadButton("downloadGuide",label = "Download the App guide"),
+              
             ),
             
             
             mainPanel(
-                    actionButton('DeleteSelectedData', 'Delete Incorect Data'), 
-                    actionButton('ResetData', 'Reset Data'),
-                    plotOutput("myPlot", 
-                               brush = brushOpts(id = "plot1_brush")),
+                    actionButton('DeleteSelectedData', 'Delete Incorrect Points'), 
+                    actionButton('ResetData', 'Reset All Data'),
+                    shinycssloaders::withSpinner(plotOutput("myPlot", 
+                               brush = brushOpts(id = "plot1_brush"))),
                     plotOutput("myPlot2")
             )
      )
    )
-)
+
 
 library(shiny)
 #library(shinythemes)
@@ -62,43 +57,47 @@ server <- function(input, output,session) {
 
 v = reactiveValues(df_sheet = NULL,
                    df_filter= NULL,
+                   df_dataset=NULL,
+                   results= NULL,
                    reset=FALSE) 
 
 
-  
   raw_data <- reactive({
     infile <- input$file
     if (is.null(infile)) {      # User has not uploaded a file yet
       tbl= pv %>% 
-        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)
+        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)%>%
+        group_by(date,sp,rep) %>%  mutate(obs=row_number()) %>% ungroup()
           }
     else{
       tbl = read.csv(infile$datapath, stringsAsFactors = FALSE) %>% 
-        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)
+        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)%>%
+        group_by(date,sp,rep) %>%  mutate(obs=row_number()) %>% ungroup()
     }
-    v$df_sheet = tbl
+    v$df_dataset = tbl
     tbl
   })
   #raw_data_up<-raw_data()
 
  ###### filter the one "rep" you want #####
   output$date <- renderUI({
-    cyl <- raw_data()  %>% pull(date) %>% unique()
-    selectInput("date", "date:", choices = cyl)
+    date_sel <- raw_data()  %>% pull(date) %>% unique()
+    selectInput("date", "date:", choices = date_sel)
   })
   output$sp <- renderUI({
-    cyl <- raw_data()%>% filter( date ==  input$date) %>% pull(sp) %>% unique()
-    selectInput("sp", "species:", choices = cyl)
+    sp_sel <- raw_data()%>% filter( date ==  input$date) %>% pull(sp) %>% unique()
+    selectInput("sp", "species:", choices = sp_sel)
   })
   output$rep <- renderUI({
-    cyl <- raw_data()%>% filter( sp ==  input$sp, date ==  input$date) %>% pull(rep) %>% unique()
-    selectInput("rep", "replicate:", choices = cyl)
+    rep_sel <- raw_data()%>% filter( sp ==  input$sp, date ==  input$date) %>% pull(rep) %>% unique()
+    selectInput("rep", "replicate:", choices = rep_sel)
   })
 
+############# the filtered data ########################
  data_analize <- reactive({
-   df_f<-raw_data()
+   #df_f<-raw_data() 
 
-   df_f <- filter(df_f,date ==  input$date, sp ==  input$sp, rep ==  input$rep )
+   df_f <- filter(v$df_dataset,date ==  input$date, sp ==  input$sp, rep ==  input$rep )
    
   v$df_sheet <- df_f
  })
@@ -126,7 +125,7 @@ v = reactiveValues(df_sheet = NULL,
       #geom_vline(xintercept = my.lines, linetype = "dashed",colour="red")+
       geom_point(size=3,aes(x=wp,y=M))+
       geom_abline(intercept = b0, slope = b1,linetype="dashed")+
-      labs(x=expression(-Psi~~("Bar")),y="water wheight (g)",colour="")+
+      labs(x=expression(-Psi~~("Bar")),y="water weight (g)",colour="")+
       theme_bw()+
       theme(text = element_text(size=20))
   })
@@ -188,9 +187,8 @@ v = reactiveValues(df_sheet = NULL,
 
     b0 <- coef(my.seg)[[1]]
 
-   
-    data<-v$df_sheet %>% mutate(rwc=round(M/b0*100,2))
-    data[, c("obs","rwc","wp")]
+    data<-v$df_sheet %>% mutate(RWC=round(M/b0*100,2),WP=wp)
+    as.data.frame(data[, c("obs","RWC","WP")])
   })
   
 ########### the results table
@@ -247,10 +245,12 @@ v = reactiveValues(df_sheet = NULL,
     #elastisity
     elsticity<-sd(lm_b$psi_p)/sd(lm_b$rwc_for_c)
     
-    Parameter<-c("TLP","RWC at TLP","Osm full","elsticity","capacitance before","capacitance after")
+    Parameter<-c("TLP","RWC at TLP","Osm full","elasticity","capacitance before","capacitance after")
     Value<-c(sprintf("%.2f",TLP),sprintf("%.1f",rwc_tlp),sprintf("%.2f",osm_full),sprintf("%.2f",elsticity),
              sprintf("%.3f",capacitance_befor),sprintf("%.3f",capacitance_after))
     output<-data.table(Parameter,Value)
+    
+    v$results<-output
     output
   })
 ######## full weight of water
@@ -266,39 +266,51 @@ v = reactiveValues(df_sheet = NULL,
   })
 
  ######### manual filter 
-  observeEvent(input$DeleteSelectedData, {
-    
-    var1 <- brushedPoints(v$df_sheet,brush = input$plot1_brush, allRows = TRUE)
-    v$reset = FALSE
-    if (is.null(v$df_filter)){
-      v$df_filter <- rep(FALSE, nrow(v$df_sheet))
-    }
-    v$df_filter<- (var1$selected_| v$df_filter)
-    v$df_sheet<-v$df_sheet[!v$df_filter,]
-    
-  })
+
+    observeEvent(input$DeleteSelectedData, {
+      
+      var1 <- brushedPoints(v$df_dataset, input$plot1_brush, allRows = TRUE)
+      
+      v$df_dataset<-var1[!var1$selected_, names(var1) != "selected_", drop = FALSE]
+    })
+   
   ####### reset all your data
-  observeEvent(input$ResetData, {   
+  observeEvent(input$ResetData, { 
     
     v$df_filter <- rep(FALSE, nrow(v$df_sheet))
     df_f<-raw_data()
-    
+
     df_f <- filter(df_f,date ==  input$date, sp ==  input$sp, rep ==  input$rep )
-    
+
     v$df_sheet <- df_f
   })
   
   ###############
 
-
-      
   output$downloadData <-        ### download the filtered data
     downloadHandler(
       filename = "My Filtered PV Data.csv",
       content = function(file){
-        write.csv(v$df_sheet ,
+        write.csv(v$df_dataset ,
                   file)
       })
+
+
+output$downloadTable <-        ### download the results
+  downloadHandler(
+    filename = "My PV Results .csv",
+    content = function(file){
+      write.csv(  v$results ,
+                file)
+    })  
+      output$downloadGuide <-        ### download the App guide
+        downloadHandler(
+          filename = "App guide.pdf",
+          content = function(file){
+            file.copy(  "exple.pdf" ,
+                        file)
+          
+    })
 }
 
 shinyApp(ui, server)
