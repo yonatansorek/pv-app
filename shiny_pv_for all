@@ -1,1 +1,333 @@
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(segmented)
+library(DT)
 
+
+ui<- (
+         fluidPage(#theme = bslib::bs_theme( bg = "#002B36", fg = "#EEE8D5", 
+        #                                            ),
+     sidebarLayout(
+            sidebarPanel(
+              fileInput('file', 'Upload your CSV File',
+                        accept = c('.csv','.tsv') ),
+              downloadButton("downloadData",label = "Download your clean data"),
+              uiOutput('categ'),
+              uiOutput('subcateg'),
+               uiOutput('rep'),
+
+              h4("full water weight"),
+              textOutput("ww"),
+              h4("Your Current Data"), 
+              verbatimTextOutput("brush_info"),
+              tableOutput("values"),
+              h4("Leaf P-V Parameters"), 
+              tableOutput("final_results"),
+              downloadButton("downloadTable",label = "Download your Results"),
+              h5(),
+              downloadButton("downloadGuide",label = "Download the App guide"),
+              
+            ),
+            
+            
+            mainPanel(
+                    actionButton('DeleteSelectedData', 'Delete Incorrect Points'), 
+                    actionButton('ResetData', 'Reset All Data'),
+                    shinycssloaders::withSpinner(plotOutput("myPlot", 
+                               brush = brushOpts(id = "plot1_brush"))),
+                    plotOutput("myPlot2")
+            )
+     )
+   )
+)
+
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(segmented)
+library(data.table)
+
+pv<-read.csv("pv summer 2020.csv")
+
+server <- function(input, output,session) {
+
+v = reactiveValues(df_sheet = NULL,
+                   df_filter= NULL,
+                   df_dataset=NULL,
+                   results= NULL,
+                   reset=FALSE) 
+
+
+  raw_data <- reactive({
+    infile <- input$file
+    if (is.null(infile)) {      # User has not uploaded a file yet
+      tbl= pv %>% 
+        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)%>%
+        group_by(categ,subcateg,rep) %>%  mutate(obs=row_number()) %>% ungroup()
+          }
+    else{
+      tbl = read.csv(infile$datapath, stringsAsFactors = FALSE) %>% 
+        mutate(wp_mpa=wp/-10,wp_m=-1/wp_mpa,M=fresh_mass_g-extra_mass_g-dry_mass_g)%>%
+        group_by(categ,subcateg,rep) %>%  mutate(obs=row_number()) %>% ungroup()
+    }
+    v$df_dataset = tbl
+    tbl
+  })
+  #raw_data_up<-raw_data()
+
+ ###### filter the one "rep" you want #####
+  output$categ <- renderUI({
+    categ_sel <- raw_data()  %>% pull(categ) %>% unique()
+    selectInput("categ", "Category:", choices = categ_sel)
+  })
+  output$subcateg <- renderUI({
+    subcateg_sel <- raw_data()%>% filter( categ ==  input$categ) %>% pull(subcateg) %>% unique()
+    selectInput("subcateg", "Sub category:", choices = subcateg_sel)
+  })
+  output$rep <- renderUI({
+    rep_sel <- raw_data()%>% filter( subcateg ==  input$subcateg, categ ==  input$categ) %>% pull(rep) %>% unique()
+    selectInput("rep", "Replicate:", choices = rep_sel)
+  })
+
+############# the filtered data ########################
+ data_analize <- reactive({
+   #df_f<-raw_data() 
+
+   df_f <- filter(v$df_dataset,categ ==  input$categ, subcateg ==  input$subcateg, rep ==  input$rep )
+   
+  v$df_sheet <- df_f
+ })
+
+ counter = 0  #for the initial start
+ 
+ ########## plot 1 
+  output$myPlot <- renderPlot({
+    if (counter == 0){
+    data_analize()
+  }
+##model to find and present the braek point and calculate after that the intercept     
+    my.lm <- lm(M~wp , data =  v$df_sheet)
+    my.seg <- segmented(my.lm, 
+                        seg.Z = ~ wp)
+    
+    my.lines <- my.seg$psi[, 2]
+    
+    s1 <-as.data.frame(slope(my.seg))[1,1]
+    s2<-as.data.frame(slope(my.seg))[2,1]
+    int1 <- as.data.frame(intercept(my.seg))[1,1]
+    int2 <-as.data.frame(intercept(my.seg))[2,1]
+    
+
+    ggplot(  v$df_sheet)+
+      ggtitle("interactive plot - brush outlier and press 'delete'")+
+      #geom_vline(xintercept = my.lines, linetype = "dashed",colour="red")+
+      geom_point(size=3,aes(x=wp,y=M))+
+      geom_abline(intercept = int1, slope = s1,linetype="dashed",colour="blue")+
+      geom_abline(intercept = int2, slope = s2,linetype="dashed")+
+      labs(x=expression(-Psi~~("Bar")),y="water weight (g)",colour="")+
+      theme_bw()+
+      theme(text = element_text(size=20))
+  })
+  
+  ########## plot 2 
+  
+  output$myPlot2 <- renderPlot({
+    
+    my.lm <- lm(M~wp , data =  v$df_sheet)
+    r_sq<-summary(my.lm)$r.squared
+    
+    my.seg <- segmented(my.lm, 
+                        seg.Z = ~ wp)
+    
+     ###cehck the slope changes
+    s1 <-as.data.frame(slope(my.seg))[1,1]
+    s2<-as.data.frame(slope(my.seg))[2,1]
+    int1 <- as.data.frame(intercept(my.seg))[1,1]
+    int2 <-as.data.frame(intercept(my.seg))[2,1]
+    s1>s2
+
+    TLP<-summary.segmented(my.seg)$psi [1,2]
+    break_point_est<--1/(TLP/-10)
+    
+    intercept2 <- coef(my.seg)[[1]]
+
+    pv_data<-v$df_sheet %>% mutate(rwc=round(M/intercept2*100,2))
+    
+    my.lm2 <- lm(rwc~wp_m , data = pv_data)
+    my.seg2 <- segmented(my.lm2,
+                         seg.Z = ~ wp_m,
+                         psi = break_point_est)
+    
+    my.lines <- my.seg2$psi[, 2]
+    my.fitted2 <- fitted(my.seg2)
+    my.model2 <- data.frame(wp_m_f = pv_data$wp_m, rwc_f= my.fitted2)
+    pv_data<-cbind(pv_data,my.model2)
+    
+    lm_d<-subset(pv_data,wp_m<(summary.segmented(my.seg2)$psi [1,2]))
+    osmo_mod<-lm(wp_m~rwc,data=lm_d)
+    TLP<--1/(summary.segmented(my.seg2)$psi [1,2])
+    TLP<-round(TLP,2)
+    
+    if(    s1>s2){
+    pv_data %>%
+      ggplot()+
+      geom_point(aes(colour = "Data",y=wp_m,x=rwc),size=3)+
+      geom_smooth(data=lm_d, aes(y=wp_m,x=rwc,colour = "lm Model"),method=lm, fullrange=TRUE,se=F,linetype="dashed",size=1.5)+
+      scale_color_manual(values=c( "black", "darkgreen","tomato"))+
+      ggtitle(label = paste("TLP:", TLP))+
+      theme_bw()+
+      labs(y=expression(1/Psi~~("-MPa"^-1)),x="RWC",colour="")+
+      #annotate(geom = 'text', label = paste("TLP:",TLP), x = -Inf, y = Inf, hjust = 1, vjust = 1,size=10)+
+      theme(text = element_text(size=20), legend.position = c(0.85,0.85),
+            plot.title = element_text(size=24,hjust = 0.5,face = "bold",margin = margin(t = 10, b = -40))
+      )+
+      geom_hline(yintercept =my.lines, linetype = "dashed",size=1.5,colour="red")+
+      scale_x_reverse()
+    }
+    else
+      ggplot()+
+      annotate("text", x = 1, y = 1, size = 16,
+               label = "Problem with break-point...",
+               fontface = "bold")
+  })
+  
+##########################table of the current rae data
+  
+  output$brush_info <- renderPrint({
+
+
+    my.lm <- lm(M~wp , data = v$df_sheet)
+    my.seg <- segmented(my.lm,
+                        seg.Z = ~ wp)
+
+    b0 <- coef(my.seg)[[1]]
+
+    data<-v$df_sheet %>% mutate(RWC=round(M/b0*100,2),WP=wp)
+    as.data.frame(data[, c("obs","RWC","WP")])
+  })
+  
+########### the results table
+  output$final_results <- renderTable({
+    
+    my.lm <- lm(M~wp , data = v$df_sheet)
+    my.seg <- segmented(my.lm,  seg.Z = ~ wp)
+    
+    my.slopes <- coef(my.seg)
+    b0 <- coef(my.seg)[[1]]
+    
+    break_point_est<--1/((summary.segmented(my.seg)$psi [1,2]) /-10)
+    
+    data<-v$df_sheet %>% mutate(rwc=round(M/b0*100,2), rwc_for_c=rwc/100, left_rwc=100-rwc) 
+    
+    my.lm2 <- lm(rwc~wp_m , data = data)
+    my.seg2 <- segmented(my.lm2, 
+                         psi = break_point_est,
+                         seg.Z = ~ wp_m)
+    
+    TLP<--1/(summary.segmented(my.seg2)$psi [1,2])
+    
+    lm_d<-subset(data,wp_m<(summary.segmented(my.seg2)$psi [1,2]))
+    
+    model_for_elas <- lm(wp_m ~ left_rwc , data =lm_d )
+    interc_1 <- coef(model_for_elas)[[1]]
+    slo_1 <- coef(model_for_elas)[[2]]
+    
+    data<-data %>% mutate(psi_0=-1/(interc_1+slo_1*left_rwc),psi_p=wp_mpa-psi_0)
+    
+    lm_b<-subset(data,wp_m>(summary.segmented(my.seg2)$psi [1,2]))
+    lm_d<-subset(data,wp_m<(summary.segmented(my.seg2)$psi [1,2]))
+    
+    model_for_rwc <- lm(rwc ~ wp_m , data =lm_d )
+    new_point_tlp <- data.frame(
+      wp_m = summary.segmented(my.seg2)$psi [1,2]
+    )
+    
+    rwc_tlp<-predict(model_for_rwc, newdata = new_point_tlp)
+    rwc_tlp<-as.data.frame(rwc_tlp)[1,1]
+    
+    model_for_osm <- lm(wp_m ~ rwc , data =lm_d )
+    
+    new.rwc <- data.frame(
+      rwc = 100)
+    #100% osmolytes
+    
+    osm_full=-1/predict(model_for_osm, newdata = new.rwc)
+    osm_full<-as.data.frame(osm_full)[1,1]
+    
+    #capacitance
+    capacitance_befor<-sd(lm_b$rwc_for_c)/sd(lm_b$wp_mpa)
+    capacitance_after<-sd(lm_d$rwc_for_c)/sd(lm_d$wp_mpa)
+    #elastisity
+    elsticity<-sd(lm_b$psi_p)/sd(lm_b$rwc_for_c)
+    
+    Parameter<-c("TLP","RWC at TLP","Osm full","elasticity","capacitance before","capacitance after")
+    Value<-c(sprintf("%.2f",TLP),sprintf("%.1f",rwc_tlp),sprintf("%.2f",osm_full),sprintf("%.2f",elsticity),
+             sprintf("%.3f",capacitance_befor),sprintf("%.3f",capacitance_after))
+    output<-data.table(Parameter,Value)
+    
+    v$results<-output
+    output
+  })
+######## full weight of water
+  output$ww<-renderPrint({
+
+    my.lm <- lm(M~wp , data = v$df_sheet)
+    my.seg <- segmented(my.lm,
+                        seg.Z = ~ wp)
+    int1 <- as.data.frame(intercept(my.seg))[1,1]
+    
+    show_int<-as.data.frame(int1) %>% rename("The intercept of the blue line"="int1")
+    cat(int1)
+  })
+
+ ######### manual filter 
+
+    observeEvent(input$DeleteSelectedData, {
+      
+      var1 <- brushedPoints(v$df_dataset, input$plot1_brush, allRows = TRUE)
+      
+      v$df_dataset<-var1[!var1$selected_, names(var1) != "selected_", drop = FALSE]
+    })
+   
+  ####### reset all your data
+  observeEvent(input$ResetData, { 
+    
+    v$df_filter <- rep(FALSE, nrow(v$df_sheet))
+    df_f<-raw_data()
+
+    df_f <- filter(df_f,categ ==  input$categ, subcateg ==  input$subcateg, rep ==  input$rep )
+
+    v$df_sheet <- df_f
+  })
+  
+  ###############
+
+  output$downloadData <-        ### download the filtered data
+    downloadHandler(
+      filename = "My Filtered PV Data.csv",
+      content = function(file){
+        write.csv(v$df_dataset ,
+                  file)
+      })
+
+
+output$downloadTable <-        ### download the results
+  downloadHandler(
+    filename = "My PV Results .csv",
+    content = function(file){
+      write.csv(  v$results ,
+                file)
+    })  
+      output$downloadGuide <-        ### download the App guide
+        downloadHandler(
+          filename = "App guide.pdf",
+          content = function(file){
+            file.copy(  "exple.pdf" ,
+                        file)
+          
+    })
+}
+
+shinyApp(ui, server)
