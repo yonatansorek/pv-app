@@ -1,12 +1,5 @@
-library(shiny)
-library(dplyr)
-library(ggplot2)
-library(ggpubr)
-library(segmented)
-library(DT)
-
-
-ui<- (
+########## ui seved in file in your direction
+shinyUI(
          fluidPage(#theme = bslib::bs_theme( bg = "#002B36", fg = "#EEE8D5", 
         #                                            ),
      sidebarLayout(
@@ -42,6 +35,8 @@ ui<- (
      )
    )
 )
+
+########## server seved inthe same file in your direction ("pv summer 2020.csv" also need to be saved there)
 
 library(shiny)
 library(dplyr)
@@ -329,5 +324,5 @@ output$downloadTable <-        ### download the results
           
     })
 }
-
-shinyApp(ui, server)
+######### Run this line in R studio:
+shiny::runApp("C:/shiny_pv_all/") #####example of my file with the ui and server (shiny_pv_all) in my direction
